@@ -6,8 +6,6 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/hashicorp/consul/api v1.35.0
 	github.com/spf13/viper v1.21.0
-	google.golang.org/grpc v1.85.0
-	google.golang.org/protobuf v1.36.12
 )
 
 require (
