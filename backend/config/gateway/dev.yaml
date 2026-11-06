@@ -1,0 +1,12 @@
+server:
+  port: 8000
+  mode: debug
+
+consul:
+  address: 127.0.0.1:8500
+  token: ""
+
+service:
+  name: api-gateway
+  id: api-gateway
+  address: 127.0.0.1
