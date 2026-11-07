@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/echo404s/PicMind/backend/pkg/registry"
-	"github.com/echo404s/PicMind/backend/vision"
+	"github.com/echo404s/PicMind/backend/vision/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -24,14 +27,15 @@ func main() {
 	}
 	cfgPath := filepath.Join("config", "vision", env+".yaml")
 
-	cfg, err := vision.LoadConfig(cfgPath)
+	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Server.Port))
+	// gRPC
+	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Server.GRPCPort))
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		log.Fatalf("grpc listen: %v", err)
 	}
 
 	grpcServer := grpc.NewServer()
@@ -41,29 +45,65 @@ func main() {
 	hs.SetServingStatus(cfg.Service.Name, healthpb.HealthCheckResponse_SERVING)
 	// Business RPCs (Score / Describe) register here after proto is ready.
 
+	// --- HTTP (api-gateway) ---
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	// Score HTTP handlers for gateway register here later.
+	httpServer := &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.Server.HTTPPort),
+		Handler:           httpMux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	reg, err := registry.New(cfg.Consul.Address, cfg.Consul.Token)
 	if err != nil {
 		log.Fatalf("registry: %v", err)
 	}
 
-	grpcCheckAddr := fmt.Sprintf("%s:%d", cfg.Service.Address, cfg.Server.Port)
+	grpcID := cfg.Service.ID + "-grpc"
+	httpID := cfg.Service.ID + "-http"
+	httpName := cfg.Service.Name + "-http"
+	grpcName := cfg.Service.Name + "-grpc"
+
+	grpcCheckAddr := fmt.Sprintf("%s:%d", cfg.Service.Address, cfg.Server.GRPCPort)
 	if err := reg.Register(registry.Service{
-		ID:      cfg.Service.ID,
-		Name:    cfg.Service.Name,
+		ID:      grpcID,
+		Name:    grpcName,
 		Address: cfg.Service.Address,
-		Port:    cfg.Server.Port,
-		Tags:    cfg.Service.Tags,
+		Port:    cfg.Server.GRPCPort,
+		Tags:    appendTags(cfg.Service.Tags, "grpc"),
 	}, registry.GRPCCheck(grpcCheckAddr)); err != nil {
-		log.Fatalf("register: %v", err)
+		log.Fatalf("register grpc: %v", err)
+	}
+
+	httpCheckURL := fmt.Sprintf("http://%s:%d/healthz", cfg.Service.Address, cfg.Server.HTTPPort)
+	if err := reg.Register(registry.Service{
+		ID:      httpID,
+		Name:    httpName,
+		Address: cfg.Service.Address,
+		Port:    cfg.Server.HTTPPort,
+		Tags:    appendTags(cfg.Service.Tags, "http"),
+	}, registry.HTTPCheck(httpCheckURL)); err != nil {
+		_ = reg.Deregister(grpcID)
+		log.Fatalf("register http: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
-		log.Printf("%s gRPC listening on :%d (config=%s)", cfg.Service.Name, cfg.Server.Port, cfgPath)
-		errCh <- grpcServer.Serve(lis)
+		log.Printf("%s gRPC listening on :%d (consul=%s)", cfg.Service.Name, cfg.Server.GRPCPort, cfg.Service.Name)
+		errCh <- grpcServer.Serve(grpcLis)
+	}()
+	go func() {
+		log.Printf("%s HTTP listening on :%d (consul=%s)", cfg.Service.Name, cfg.Server.HTTPPort, httpName)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
 	}()
 
 	select {
@@ -75,8 +115,23 @@ func main() {
 
 	hs.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
 	hs.SetServingStatus(cfg.Service.Name, healthpb.HealthCheckResponse_NOT_SERVING)
-	if err := reg.Deregister(cfg.Service.ID); err != nil {
-		log.Printf("deregister: %v", err)
-	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
 	grpcServer.GracefulStop()
+
+	if err := reg.Deregister(grpcID); err != nil {
+		log.Printf("deregister grpc: %v", err)
+	}
+	if err := reg.Deregister(httpID); err != nil {
+		log.Printf("deregister http: %v", err)
+	}
+}
+
+func appendTags(base []string, extra string) []string {
+	out := make([]string, 0, len(base)+1)
+	out = append(out, base...)
+	out = append(out, extra)
+	return out
 }

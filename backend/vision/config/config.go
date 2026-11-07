@@ -1,4 +1,4 @@
-package vision
+package config
 
 import (
 	"fmt"
@@ -16,9 +16,10 @@ type Config struct {
 	Vision  VisionLLM     `mapstructure:"vision"`
 }
 
-// Server holds gRPC listen settings.
+// Server holds dual listen ports: HTTP for gateway, gRPC for internal callers.
 type Server struct {
-	Port int `mapstructure:"port"`
+	HTTPPort int `mapstructure:"http_port"`
+	GRPCPort int `mapstructure:"grpc_port"`
 }
 
 // Service holds Consul registration identity.
@@ -93,8 +94,14 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	if c.Server.Port <= 0 {
-		return fmt.Errorf("server.port must be > 0")
+	if c.Server.HTTPPort <= 0 {
+		return fmt.Errorf("server.http_port must be > 0")
+	}
+	if c.Server.GRPCPort <= 0 {
+		return fmt.Errorf("server.grpc_port must be > 0")
+	}
+	if c.Server.HTTPPort == c.Server.GRPCPort {
+		return fmt.Errorf("server.http_port and server.grpc_port must differ")
 	}
 	if c.Consul.Address == "" {
 		return fmt.Errorf("consul.address is required")
