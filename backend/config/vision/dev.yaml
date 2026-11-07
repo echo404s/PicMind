@@ -1,0 +1,53 @@
+server:
+  port: 9091
+
+consul:
+  address: 127.0.0.1:8500
+  token: ""
+
+service:
+  name: vision-service
+  id: vision-service-1
+  address: 127.0.0.1
+  tags:
+    - grpc
+    - vision
+
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+vision:
+  # Cache key includes this version; bump when scoring prompt changes.
+  prompt_version: "v1"
+  timeout: 60s
+  max_concurrent: 8
+
+  # Ordered failover chain: [0] primary, then fallbacks in order.
+  providers:
+    - name: qwen-vl
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: "" # set via local override; do not commit secrets
+      model: qwen-vl-max
+    - name: glm-4v
+      base_url: https://open.bigmodel.cn/api/paas/v4
+      api_key: ""
+      model: glm-4v
+    # - name: llava-local
+    #   base_url: http://127.0.0.1:11434/v1
+    #   api_key: ""
+    #   model: llava
+
+  rate_limit:
+    rps: 2
+    burst: 4
+
+  retry:
+    max_attempts: 3
+    initial_backoff: 200ms
+    max_backoff: 5s
+
+  cache:
+    enabled: true
+    ttl: 24h
