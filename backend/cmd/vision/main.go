@@ -15,8 +15,7 @@ import (
 
 	"github.com/echo404s/PicMind/backend/pkg/registry"
 	"github.com/echo404s/PicMind/backend/vision/config"
-	"github.com/echo404s/PicMind/backend/vision/router"
-	"github.com/gin-gonic/gin"
+	"github.com/echo404s/PicMind/backend/vision/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -45,17 +44,13 @@ func main() {
 	healthpb.RegisterHealthServer(grpcServer, hs)
 	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	hs.SetServingStatus(cfg.Service.Name, healthpb.HealthCheckResponse_SERVING)
-	// Business RPCs (Score / Describe) register here after proto is ready.
+	// Business RPCs register here later; reuse httpServer.Services().
 
 	// --- HTTP (api-gateway) ---
-	gin.SetMode(gin.ReleaseMode)
-	engine := gin.New()
-	engine.Use(gin.Recovery())
-	router.Register(engine)
-
+	httpApp := server.New(cfg)
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.HTTPPort),
-		Handler:           engine,
+		Handler:           httpApp.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -97,7 +92,7 @@ func main() {
 
 	errCh := make(chan error, 2)
 	go func() {
-		log.Printf("%s gRPC listening on :%d (consul=%s)", cfg.Service.Name, cfg.Server.GRPCPort, cfg.Service.Name)
+		log.Printf("%s gRPC listening on :%d (consul=%s)", cfg.Service.Name, cfg.Server.GRPCPort, grpcName)
 		errCh <- grpcServer.Serve(grpcLis)
 	}()
 	go func() {
