@@ -15,6 +15,8 @@ import (
 
 	"github.com/echo404s/PicMind/backend/pkg/registry"
 	"github.com/echo404s/PicMind/backend/vision/config"
+	"github.com/echo404s/PicMind/backend/vision/router"
+	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -46,15 +48,14 @@ func main() {
 	// Business RPCs (Score / Describe) register here after proto is ready.
 
 	// --- HTTP (api-gateway) ---
-	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	// Score HTTP handlers for gateway register here later.
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+	engine.Use(gin.Recovery())
+	router.Register(engine)
+
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.HTTPPort),
-		Handler:           httpMux,
+		Handler:           engine,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
